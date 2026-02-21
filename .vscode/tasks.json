@@ -1,0 +1,30 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "type": "cargo",
+            "command": "build",
+            "args": [
+                "--release", 
+                "--target", 
+                "wasm32-unknown-unknown"
+            ],
+            "problemMatcher": ["$rustc"],
+            "group": "build",
+            "label": "rust: build wasm"
+        },
+        {
+            "label": "wasm-bindgen",
+            "type": "shell",
+            "command": "wasm-bindgen",
+            "args": [
+                "--out-dir", "./out",
+                "--target", "web",
+                "target/wasm32-unknown-unknown/release/CozyWinter26.wasm" 
+            ],
+            "dependsOn": "rust: build wasm",
+            "problemMatcher": [],
+            "group": "build"
+        }
+    ]
+}
