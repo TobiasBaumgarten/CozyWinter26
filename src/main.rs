@@ -17,6 +17,7 @@ struct NutStats {
 struct PlayerStats {
     dmg: f32,
     laser_length: f32,
+    lifes: i32,
 }
 
 #[derive(Debug, Resource)]
@@ -48,9 +49,9 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     let player_stats = PlayerStats {
         dmg: 50.,
         laser_length: 500.,
+        lifes: 1,
     };
     commands.insert_resource(player_stats.clone());
-
 
     // init nut stats
     {

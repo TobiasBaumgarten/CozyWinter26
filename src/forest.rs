@@ -1,11 +1,11 @@
-use std::{any::Any, f32::consts::PI, time::Duration};
+use std::{f32::consts::PI, time::Duration};
 
-use bevy::{math::ops::sin, prelude::*, state::commands};
+use bevy::{math::ops::sin, prelude::*};
 
 use crate::{Money, NutStats, PlayerStats, setup};
 
 const HALF_SIZE_CUBE: f32 = 16.;
-const GRAVITY: Vec2 = Vec2::new(0., 300.);
+const GRAVITY: Vec2 = Vec2::new(0., 70.);
 
 pub struct ForestPlugin;
 
@@ -39,6 +39,7 @@ struct Cube {
     dir: Vec2,
 }
 
+#[allow(unused)]
 #[derive(Debug, Component)]
 enum NutType {
     Base,
@@ -49,11 +50,11 @@ enum NutType {
 }
 
 #[derive(Debug, Component)]
-struct Falling(Timer);
+struct Falling(Timer, Vec2);
 
 #[derive(Debug, Component)]
 struct PlayerCube {
-    lifes: i32,
+    available_cubes: i32,
 }
 
 #[derive(Debug, Message)]
@@ -100,7 +101,7 @@ fn setup_forest(
                 translation: Vec3::new(0., 0., 0.),
                 ..Default::default()
             },
-            PlayerCube { lifes: 1 },
+            PlayerCube { available_cubes: 1 },
             Cube {
                 size: HALF_SIZE_CUBE,
                 dir: Vec2::new(1., 0.),
@@ -162,7 +163,7 @@ fn update_cube(
 
 fn collide_laser_cube(
     mut points: ResMut<LaserPoints>,
-    mut cubes: Query<(Entity, &mut Cube, &Transform, Option<&mut PlayerCube>)>,
+    mut cubes: Query<(&mut Cube, &Transform, Option<&mut PlayerCube>)>,
     time: Res<Time>,
     player_stats: Res<PlayerStats>,
 ) {
@@ -175,7 +176,7 @@ fn collide_laser_cube(
     points.list = vec![(start, start + ray_dir * remaining)];
 
     // First pass: find PlayerCube and reflect
-    for (entity, mut cube, trans, mut is_player) in cubes.iter_mut() {
+    for (mut cube, trans, is_player) in cubes.iter_mut() {
         let cube_matrix = trans.to_matrix();
         let world_to_local = cube_matrix.inverse();
 
@@ -222,12 +223,13 @@ fn collide_laser_cube(
 }
 
 fn handle_dead_cubes(
-    query: Query<(Entity, &Cube, Option<&PlayerCube>, Option<&NutType>)>,
+    query: Query<(Entity, &Cube, Option<&mut PlayerCube>, Option<&NutType>)>,
     mut commands: Commands,
     mut money: ResMut<Money>,
     nut_stats: Res<NutStats>,
+    mut writer: MessageWriter<DeadPlayerMessage>,
 ) {
-    for (entity, cube, player, nut_type) in &query {
+    for (entity, cube, player, nut_type) in query {
         if cube.life > 0. {
             continue;
         }
@@ -247,16 +249,20 @@ fn handle_dead_cubes(
 
             commands
                 .entity(entity)
-                .insert(Falling(Timer::new(Duration::new(1, 0), TimerMode::Once)));
+                .insert(Falling(Timer::new(Duration::new(1, 0), TimerMode::Once),Vec2::new(0.,0.)));
 
             println!("Money: {}", money.0);
-            continue; // use continue instead of return, return exits the whole system!
+            continue; 
         }
 
         // when the player has zero life
-        if let Some(_player) = player {
-            commands.entity(entity).remove::<Cube>();
-            // commands.entity(entity).despawn();
+        if let Some(mut _player) = player {
+            _player.available_cubes -= 1;
+            if _player.available_cubes < 1 {
+                // when the player has zero cubes left
+                writer.write(DeadPlayerMessage);
+                commands.entity(entity).despawn();
+            }
         }
     }
 }
@@ -351,10 +357,10 @@ fn handle_falling(
 
         if falling.0.is_finished() {
             commands.entity(entity).despawn();
-            return;
+            continue;
         }
-
-        trans.translation -= GRAVITY.extend(0.) * time.delta_secs();
+        falling.1 += GRAVITY * time.delta_secs();
+        trans.translation -= falling.1.extend(0.);
     }
 }
 
