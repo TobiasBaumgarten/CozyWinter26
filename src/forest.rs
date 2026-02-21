@@ -2,7 +2,7 @@ use std::{f32::consts::PI, time::Duration};
 
 use bevy::{math::ops::sin, prelude::*};
 
-use crate::{Money, NutStats, NutType, PlayerStats, setup};
+use crate::{GameState, Money, NutStats, NutType, PlayerStats, setup};
 
 const HALF_SIZE_CUBE: f32 = 16.;
 const GRAVITY: Vec2 = Vec2::new(0., 70.);
@@ -13,7 +13,7 @@ impl Plugin for ForestPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<SpawnNutMessage>()
             .add_message::<DeadPlayerMessage>()
-            .add_systems(Startup, setup_forest.after(setup))
+            .add_systems(OnEnter(GameState::Playing), setup_forest)
             .add_systems(
                 Update,
                 (
@@ -21,12 +21,17 @@ impl Plugin for ForestPlugin {
                     collide_laser_cube,
                     draw_laser,
                     spawn_nuts,
-                    handle_sprite_state,
+                    handle_sprite_state_nut,
+                    handle_sprite_state_player,
                     handle_falling,
                     handle_dead_cubes,
+                    on_dead,
+                    check_end_timer,
                 )
+                    .run_if(in_state(GameState::Playing))
                     .chain(),
-            );
+            )
+            .add_systems(OnExit(GameState::Playing), on_leave);
     }
 }
 
@@ -37,11 +42,13 @@ struct Laser;
 struct Cube {
     size: f32,
     life: f32,
-    dir: Vec2,
 }
 
 #[derive(Debug, Component)]
 struct Falling(Timer, Vec2);
+
+#[derive(Debug, Component)]
+struct EndScreenTimer(Timer);
 
 #[derive(Debug, Component)]
 struct PlayerCube {
@@ -54,6 +61,9 @@ struct IceAnimation;
 #[derive(Debug, Message)]
 pub struct SpawnNutMessage;
 
+#[derive(Component, Debug)]
+struct PlayingComponent;
+
 #[derive(Debug, Message)]
 pub struct DeadPlayerMessage;
 
@@ -65,7 +75,6 @@ pub struct LaserPoints {
     pub source_start: Vec2,
     pub source_dir: Vec2,
     pub list: Vec<(Vec2, Vec2)>,
-    pub length: f32,
 }
 
 fn setup_forest(
@@ -82,18 +91,29 @@ fn setup_forest(
         let points = LaserPoints {
             source_start: start,
             source_dir: direction,
-            list: vec![(start, start + direction * player_stats.laser_length)],
-            length: 500.,
+            list: vec![(start, start + direction * player_stats.laser_length.value)],
         };
         commands.insert_resource(points);
     }
 
+    // create and insert atlas
+    let atlas = TextureAtlasLayout::from_grid(UVec2::splat(32), 5, 1, None, None);
+    let layout = texture_atlases.add(atlas);
+    commands.insert_resource(AnimationAtlasLayout(layout.clone()));
+
     // init cube
     {
-        let cube = asset_server.load("embedded://ice_cube.png");
+        let cube = asset_server.load("embedded://player_cube_sheet.png");
 
         commands.spawn((
-            Sprite::from_image(cube),
+            Sprite {
+                image: cube.clone(),
+                texture_atlas: Some(TextureAtlas {
+                    layout: layout.clone(),
+                    index: 0,
+                }),
+                ..Default::default()
+            },
             Transform {
                 rotation: Quat::from_rotation_z(30. / 180. * PI),
                 translation: Vec3::new(0., 0., 0.),
@@ -102,16 +122,12 @@ fn setup_forest(
             PlayerCube { available_cubes: 1 },
             Cube {
                 size: HALF_SIZE_CUBE,
-                dir: Vec2::new(1., 0.),
-                life: 300.,
+                life: player_stats.cube_max_life.value,
             },
+            IceAnimation,
+            PlayingComponent,
         ));
     }
-
-    // create and insert atlas
-    let atlas = TextureAtlasLayout::from_grid(UVec2::splat(32), 4, 1, None, None);
-    let layout = texture_atlases.add(atlas);
-    commands.insert_resource(AnimationAtlasLayout(layout));
 
     // spawn the fist nut
     writer.write(SpawnNutMessage);
@@ -134,14 +150,22 @@ fn spawn_nuts(
         let base_nut = NutType::Base;
 
         commands
-            .spawn((Sprite::from_image(nut.clone()),))
+            .spawn((
+                Sprite::from_image(nut.clone()),
+                Cube {
+                    size: nut_stats.size.value,
+                    life: nut_stats.life.value,
+                },
+                Transform {
+                    rotation: Quat::from_rotation_z(nut_stats.dir.value.to_angle()),
+                    translation: Vec3::new(0., 0., 0.),
+                    ..Default::default()
+                },
+                base_nut,
+                PlayingComponent,
+            ))
             .with_child((
                 IceAnimation,
-                Cube {
-                    size: nut_stats.size,
-                    life: nut_stats.life,
-                    dir: nut_stats.dir,
-                },
                 Sprite {
                     image: ice.clone(),
                     texture_atlas: Some(TextureAtlas {
@@ -150,12 +174,7 @@ fn spawn_nuts(
                     }),
                     ..Default::default()
                 },
-                Transform {
-                    rotation: Quat::from_rotation_z(nut_stats.dir.to_angle()),
-                    translation: Vec3::new(0., 0., 0.),
-                    ..Default::default()
-                },
-                base_nut,
+                PlayingComponent,
             ));
     }
 }
@@ -186,7 +205,7 @@ fn collide_laser_cube(
     let start = points.source_start;
     let mut ray_start = start;
     let mut ray_dir = points.source_dir;
-    let mut remaining = player_stats.laser_length;
+    let mut remaining = player_stats.laser_length.value;
 
     // Reset to single full line initially
     points.list = vec![(start, start + ray_dir * remaining)];
@@ -211,7 +230,7 @@ fn collide_laser_cube(
                 .transform_point3(hit_pos_local.extend(0.0))
                 .truncate();
 
-            cube.life -= time.delta_secs() * player_stats.dmg;
+            cube.life -= time.delta_secs() * player_stats.dmg.value;
 
             // handle player
             // TODO but change this later so that the laser can further s
@@ -253,7 +272,6 @@ fn handle_dead_cubes(
         // when a nut has zero life
         if let Some(nut_type) = nut_type {
             commands.entity(entity).remove::<Cube>();
-            let base = nut_stats.base_value;
             money.0 += nut_stats.get_value(nut_type);
 
             commands.entity(entity).insert(Falling(
@@ -261,7 +279,7 @@ fn handle_dead_cubes(
                 Vec2::new(0., 0.),
             ));
 
-            println!("Money: {}", money.0);
+            println!("Nuts: {}", money.0);
             continue;
         }
 
@@ -353,26 +371,45 @@ fn draw_laser(
                 ..Default::default()
             },
             Laser,
+            PlayingComponent,
         ));
     }
 }
 
-fn handle_sprite_state(
-    mut query: Query<(&Cube, &mut Sprite), With<IceAnimation>>,
+fn handle_sprite_state_nut(
+    query: Query<(&ChildOf, &mut Sprite), With<IceAnimation>>,
+    parent_query: Query<&Cube>,
     nut_stats: Res<NutStats>,
 ) {
-    for (cube, mut sprite) in query {
-        let state_part_value = nut_stats.base_value / 4;
-        let state = 4 - cube.life as i32 % state_part_value;
+    for (child_of, mut sprite) in query {
+        let Ok(cube) = parent_query.get(child_of.parent()) else {
+            continue;
+        };
+        let state_part_value = nut_stats.life.value as usize / 4;
+        let state = (nut_stats.life.value - cube.life) as usize / (state_part_value);
+        let state = state.clamp(0, 4);
         if let Some(_atlas) = &mut sprite.texture_atlas {
-            _atlas.index = state as usize;
+            _atlas.index = state;
             // println!("Atlas index: {}", state);
         };
     }
 }
 
+fn handle_sprite_state_player(
+    single: Single<(&mut Sprite, &Cube), With<PlayerCube>>,
+    player_stats: Res<PlayerStats>,
+) {
+    let (mut sprite, cube) = single.into_inner();
+    let state_part_value = player_stats.cube_max_life.value as usize / 4;
+    let state = (player_stats.cube_max_life.value - cube.life) as usize / (state_part_value);
+    let state = state.clamp(0, 4);
+    if let Some(_atlas) = &mut sprite.texture_atlas {
+        _atlas.index = state;
+    }
+}
+
 fn handle_falling(
-    mut query: Query<(Entity, &mut Transform, &mut Falling)>,
+    query: Query<(Entity, &mut Transform, &mut Falling)>,
     time: Res<Time>,
     mut commands: Commands,
 ) {
@@ -388,10 +425,50 @@ fn handle_falling(
     }
 }
 
+fn on_dead(
+    mut reader: MessageReader<DeadPlayerMessage>,
+    mut commands: Commands,
+    query: Query<Entity, With<PlayingComponent>>,
+    money: Res<Money>,
+) {
+    for _ in reader.read() {
+        let timer = Timer::new(Duration::from_secs_f32(1.5), TimerMode::Once);
+        let text = format!("Game Over\nYou Have {} Nuts", money.0);
+
+        for entity in query {
+            commands.entity(entity).despawn();
+        }
+
+        commands.spawn((
+            EndScreenTimer(timer),
+            Text2d::new(text),
+            TextLayout::new(Justify::Center, LineBreak::NoWrap),
+            Transform::from_xyz(0., 0., 0.),
+            PlayingComponent,
+        ));
+    }
+}
+
+fn check_end_timer(
+    mut single: Single<&mut EndScreenTimer>,
+    time: Res<Time>,
+    mut commands: Commands,
+) {
+    single.0.tick(time.delta());
+
+    if single.0.is_finished() {
+        println!("🔥");
+
+        commands.set_state(GameState::Shoping);
+    }
+}
+
+fn on_leave(query: Query<Entity, With<PlayingComponent>>, mut commands: Commands) {
+    for entity in query {
+        commands.entity(entity).despawn();
+    }
+}
+
 // TODO Some kind of feedback by hitting the nut
-
-// TODO Dead Screen where we show the money
-
-// TODO Switch to Upgrade Menu
 
 // Respawn timer
