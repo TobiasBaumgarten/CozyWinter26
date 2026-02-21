@@ -13,6 +13,28 @@ struct NutStats {
     base_value: i32,
 }
 
+impl NutStats {
+    fn get_value(&self, nut_type: &NutType) -> i32 {
+        self.base_value * match nut_type {
+                    NutType::Base => 1,
+                    NutType::Bronze => 10,
+                    NutType::Silver => 20,
+                    NutType::Gold => 50,
+                    NutType::Diamant => 100,
+                }
+    }
+}
+
+#[allow(unused)]
+#[derive(Debug, Component)]
+enum NutType {
+    Base,
+    Bronze,
+    Silver,
+    Gold,
+    Diamant,
+}
+
 #[derive(Debug, Resource, Clone)]
 struct PlayerStats {
     dmg: f32,

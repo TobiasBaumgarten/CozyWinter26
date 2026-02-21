@@ -2,7 +2,7 @@ use std::{f32::consts::PI, time::Duration};
 
 use bevy::{math::ops::sin, prelude::*};
 
-use crate::{Money, NutStats, PlayerStats, setup};
+use crate::{Money, NutStats, NutType, PlayerStats, setup};
 
 const HALF_SIZE_CUBE: f32 = 16.;
 const GRAVITY: Vec2 = Vec2::new(0., 70.);
@@ -21,6 +21,7 @@ impl Plugin for ForestPlugin {
                     collide_laser_cube,
                     draw_laser,
                     spawn_nuts,
+                    handle_sprite_state,
                     handle_falling,
                     handle_dead_cubes,
                 )
@@ -39,16 +40,6 @@ struct Cube {
     dir: Vec2,
 }
 
-#[allow(unused)]
-#[derive(Debug, Component)]
-enum NutType {
-    Base,
-    Bronze,
-    Silver,
-    Gold,
-    Diamant,
-}
-
 #[derive(Debug, Component)]
 struct Falling(Timer, Vec2);
 
@@ -57,11 +48,17 @@ struct PlayerCube {
     available_cubes: i32,
 }
 
+#[derive(Debug, Component)]
+struct IceAnimation;
+
 #[derive(Debug, Message)]
 pub struct SpawnNutMessage;
 
 #[derive(Debug, Message)]
 pub struct DeadPlayerMessage;
+
+#[derive(Debug, Clone, Resource)]
+struct AnimationAtlasLayout(Handle<TextureAtlasLayout>);
 
 #[derive(Debug, Resource)]
 pub struct LaserPoints {
@@ -76,6 +73,7 @@ fn setup_forest(
     asset_server: Res<AssetServer>,
     mut writer: MessageWriter<SpawnNutMessage>,
     player_stats: Res<PlayerStats>,
+    mut texture_atlases: ResMut<Assets<TextureAtlasLayout>>,
 ) {
     // init laser
     {
@@ -110,6 +108,12 @@ fn setup_forest(
         ));
     }
 
+    // create and insert atlas
+    let atlas = TextureAtlasLayout::from_grid(UVec2::splat(32), 4, 1, None, None);
+    let layout = texture_atlases.add(atlas);
+    commands.insert_resource(AnimationAtlasLayout(layout));
+
+    // spawn the fist nut
     writer.write(SpawnNutMessage);
 }
 
@@ -118,8 +122,10 @@ fn spawn_nuts(
     asset_server: Res<AssetServer>,
     mut reader: MessageReader<SpawnNutMessage>,
     nut_stats: Res<NutStats>,
+    atlas_layout: Res<AnimationAtlasLayout>,
 ) {
-    let nut: Handle<Image> = asset_server.load("embedded://frozen_nut.png");
+    let nut: Handle<Image> = asset_server.load("embedded://nut.png");
+    let ice: Handle<Image> = asset_server.load("embedded://ice_nut_sheet.png");
     // TODO: Set position
     // TODO: resize sprite
 
@@ -127,20 +133,30 @@ fn spawn_nuts(
         // TODO Random with a chance NutType
         let base_nut = NutType::Base;
 
-        commands.spawn((
-            base_nut,
-            Cube {
-                size: nut_stats.size,
-                life: nut_stats.life,
-                dir: nut_stats.dir,
-            },
-            Sprite::from_image(nut.clone()),
-            Transform {
-                rotation: Quat::from_rotation_z(nut_stats.dir.to_angle()),
-                translation: Vec3::new(0., 0., 0.),
-                ..Default::default()
-            },
-        ));
+        commands
+            .spawn((Sprite::from_image(nut.clone()),))
+            .with_child((
+                IceAnimation,
+                Cube {
+                    size: nut_stats.size,
+                    life: nut_stats.life,
+                    dir: nut_stats.dir,
+                },
+                Sprite {
+                    image: ice.clone(),
+                    texture_atlas: Some(TextureAtlas {
+                        layout: atlas_layout.0.clone(),
+                        index: 0,
+                    }),
+                    ..Default::default()
+                },
+                Transform {
+                    rotation: Quat::from_rotation_z(nut_stats.dir.to_angle()),
+                    translation: Vec3::new(0., 0., 0.),
+                    ..Default::default()
+                },
+                base_nut,
+            ));
     }
 }
 
@@ -238,21 +254,15 @@ fn handle_dead_cubes(
         if let Some(nut_type) = nut_type {
             commands.entity(entity).remove::<Cube>();
             let base = nut_stats.base_value;
-            money.0 += base
-                * match nut_type {
-                    NutType::Base => 1,
-                    NutType::Bronze => 10,
-                    NutType::Silver => 20,
-                    NutType::Gold => 50,
-                    NutType::Diamant => 100,
-                };
+            money.0 += nut_stats.get_value(nut_type);
 
-            commands
-                .entity(entity)
-                .insert(Falling(Timer::new(Duration::new(1, 0), TimerMode::Once),Vec2::new(0.,0.)));
+            commands.entity(entity).insert(Falling(
+                Timer::new(Duration::new(1, 0), TimerMode::Once),
+                Vec2::new(0., 0.),
+            ));
 
             println!("Money: {}", money.0);
-            continue; 
+            continue;
         }
 
         // when the player has zero life
@@ -347,6 +357,20 @@ fn draw_laser(
     }
 }
 
+fn handle_sprite_state(
+    mut query: Query<(&Cube, &mut Sprite), With<IceAnimation>>,
+    nut_stats: Res<NutStats>,
+) {
+    for (cube, mut sprite) in query {
+        let state_part_value = nut_stats.base_value / 4;
+        let state = 4 - cube.life as i32 % state_part_value;
+        if let Some(_atlas) = &mut sprite.texture_atlas {
+            _atlas.index = state as usize;
+            // println!("Atlas index: {}", state);
+        };
+    }
+}
+
 fn handle_falling(
     mut query: Query<(Entity, &mut Transform, &mut Falling)>,
     time: Res<Time>,
@@ -365,7 +389,6 @@ fn handle_falling(
 }
 
 // TODO Some kind of feedback by hitting the nut
-// TODO Change texture as state of nut
 
 // TODO Dead Screen where we show the money
 
