@@ -1,6 +1,4 @@
-use bevy::{
-    ecs::relationship::RelationshipSourceCollection, input::mouse::MouseButtonInput, prelude::*,
-};
+use bevy::{input::mouse::MouseButtonInput, prelude::*};
 use bevy_embedded_assets::EmbeddedAssetPlugin;
 
 use crate::{forest::ForestPlugin, shop::ShopPlugin};
@@ -8,15 +6,15 @@ use crate::{forest::ForestPlugin, shop::ShopPlugin};
 mod forest;
 mod shop;
 
-#[derive(Debug, Resource)]
-struct NutStats {
-    size: UpgradeType<f32>,
-    life: UpgradeType<f32>,
-    dir: UpgradeType<Vec2>,
-    base_value: UpgradeType<i32>,
-    start_nuts: UpgradeType<i32>,
-    nuts_respawn_time: UpgradeType<f32>,
-}
+// #[derive(Debug, Resource)]
+// struct NutStats {
+//     size: UpgradeType<f32>,
+//     life: UpgradeType<f32>,
+//     dir: UpgradeType<Vec2>,
+//     base_value: UpgradeType<i32>,
+//     start_nuts: UpgradeType<i32>,
+//     nuts_respawn_time: UpgradeType<f32>,
+// }
 
 #[derive(Debug, Clone)]
 struct UpgradeType<T> {
@@ -37,9 +35,9 @@ impl<T> UpgradeType<T> {
     }
 }
 
-impl NutStats {
+impl PlayerStats {
     fn get_value(&self, nut_type: &NutType) -> i32 {
-        self.base_value.value
+        self.base_value
             * match nut_type {
                 NutType::Base => 1,
                 NutType::Bronze => 10,
@@ -69,10 +67,16 @@ enum NutType {
 
 #[derive(Debug, Resource, Clone)]
 struct PlayerStats {
-    dmg: UpgradeType<f32>,
-    laser_length: UpgradeType<f32>,
-    lifes: UpgradeType<i32>,
-    cube_max_life: UpgradeType<f32>,
+    dmg: f32,
+    laser_length: f32,
+    lifes: i32,
+    cube_max_life: f32,
+    size: f32,
+    life: f32,
+    dir: Vec2,
+    base_value: i32,
+    start_nuts: i32,
+    nuts_respawn_time: f32,
 }
 
 #[derive(Debug, Resource)]
@@ -104,26 +108,18 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
 
     // init player
     let player_stats = PlayerStats {
-        dmg: UpgradeType::new(50.),
-        laser_length: UpgradeType::new(500.),
-        lifes: UpgradeType::new(1),
-        cube_max_life: UpgradeType::new(200.),
+        dmg: 50.,
+        laser_length: 500.,
+        lifes: 1,
+        cube_max_life: 200.,
+        size: 16.,
+        dir: Vec2::new(0., 0.),
+        life: 100.,
+        base_value: 1,
+        nuts_respawn_time: 100.,
+        start_nuts: 2,
     };
     commands.insert_resource(player_stats.clone());
-
-    // init nut stats
-    {
-        let nut_stats = NutStats {
-            size: UpgradeType::new(16.),
-            dir: UpgradeType::new(Vec2::new(0., 0.)),
-            life: UpgradeType::new(100.),
-            base_value: UpgradeType::new(1),
-            nuts_respawn_time: UpgradeType::new(100.),
-            start_nuts: UpgradeType::new(2),
-        };
-
-        commands.insert_resource(nut_stats);
-    }
 
     commands.spawn((
         Text2d::new("Reflect The Laser\nWith You Slippery Ice Cupe\nTo Get The Nuts"),

@@ -160,8 +160,8 @@ fn read_upgrade_button(
             money.0 -= upgrade.times;
             writer.write(MoneyLabelUpdatedMessage(money.0));
             match upgrade.upgrade_type {
-                UpgradeType::Damage => player_stats.dmg.value += 10.,
-                UpgradeType::LaserLength => player_stats.laser_length.value += 20.,
+                UpgradeType::Damage => player_stats.dmg += 10.,
+                UpgradeType::LaserLength => player_stats.laser_length += 20.,
             }
         }
     }
