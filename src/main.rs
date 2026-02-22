@@ -36,17 +36,17 @@ struct UpgradeType {
 }
 
 impl UpgradeType {
-    fn new() -> Self {
-        Self {
-            increase_value: |upgrade, stats, money| {
-                if upgrade.rise_up_count(money).is_some() {
-                    stats.dmg += 2.;
-                    upgrade.cost += 1;
-                }
-            },
-            ..Default::default()
-        }
-    }
+    // fn new() -> Self {
+    //     Self {
+    //         increase_value: |upgrade, stats, money| {
+    //             if upgrade.rise_up_count(money).is_some() {
+    //                 stats.dmg += 2.;
+    //                 upgrade.cost += 1;
+    //             }
+    //         },
+    //         ..Default::default()
+    //     }
+    // }
 
     fn rise_up_count(&mut self, money: &mut Money) -> Option<()> {
         if self.cur_up_count >= self.max_up_count {
@@ -172,8 +172,8 @@ fn setup(mut commands: Commands) {
     {
         // damage upgrade
         upgrades.push(UpgradeType {
-            title: "Damgae".into(),
-            value_hint: "+5".into(),
+            title: "Damage".into(),
+            value_hint: "base + 5".into(),
             cost: 1,
             increase_value: |upgrade, player_stats, money| {
                 if upgrade.rise_up_count(money).is_some() {

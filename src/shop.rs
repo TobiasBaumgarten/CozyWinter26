@@ -1,10 +1,14 @@
 use bevy::{
-    ecs::relationship::RelationshipSourceCollection,
     input::{ButtonState, mouse::MouseButtonInput},
     prelude::*,
 };
 
 use crate::{GameState, Money, PlayerStats, UpgradeList};
+
+const UPGRADE_BUTTON_SIZE: Vec2 = Vec2::new(150., 80.);
+const UPGRADE_FIELD_MARGIN: Vec2 = Vec2::new(100., 100.);
+const UPGRADE_FIELD_PADDING: Vec2 = Vec2::new(30., 30.);
+const UPGRADE_BUTTON_ROW_COUNT: usize = 4;
 
 pub struct ShopPlugin;
 
@@ -13,18 +17,21 @@ impl Plugin for ShopPlugin {
         app.add_systems(OnEnter(GameState::Shoping), setup_shop)
             .add_message::<ButtonClickedMessage>()
             .add_message::<MoneyLabelUpdatedMessage>()
+            .add_message::<SpawnUpgradeButtonMessage>()
+            .add_message::<ChangedUpgradeState>()
             .add_systems(
                 Update,
                 (
                     check_buttons,
-                    read_new_round_button,
                     read_upgrade_button,
+                    spawn_upgrade,
                     update_money_label,
+                    update_changed_upgrade_ui,
+                    read_new_round_button,
                 )
                     .chain()
                     .run_if(in_state(GameState::Shoping)),
-            )
-            .add_systems(OnExit(GameState::Shoping), on_leave);
+            );
     }
 }
 
@@ -34,8 +41,18 @@ struct ButtonClickedMessage(Entity);
 #[derive(Message, Debug)]
 struct MoneyLabelUpdatedMessage(i32);
 
+#[derive(Message, Debug)]
+struct SpawnUpgradeButtonMessage {
+    upgrade_id: usize,
+}
+
+#[derive(Message, Debug)]
+struct ChangedUpgradeState {
+    upgrade_id: usize,
+}
+
 #[derive(Component, Debug)]
-struct Button(Vec2);
+struct UpgradeNodeParent;
 
 #[derive(Component, Debug)]
 struct MoneyLabelComponent;
@@ -44,79 +61,159 @@ struct MoneyLabelComponent;
 struct NewRound;
 
 #[derive(Component, Debug)]
-struct ShopComponent;
-
-#[derive(Component, Debug)]
 struct UpgradeComponent(usize);
 
-fn setup_shop(mut commands: Commands, money: Res<Money>, upgrades: Res<UpgradeList>) {
+#[derive(Component, Debug)]
+struct UpgradeCostLabel;
+
+#[derive(Component, Debug)]
+struct UpgradeUsesLabel;
+
+#[derive(Component, Debug)]
+struct UpgradeNode;
+
+fn setup_shop(
+    mut commands: Commands,
+    money: Res<Money>,
+    upgrades: Res<UpgradeList>,
+    mut writer: MessageWriter<SpawnUpgradeButtonMessage>,
+) {
     commands.spawn((
         Text2d::new("Shop"),
         TextLayout::new(Justify::Center, LineBreak::NoWrap),
         Transform::from_xyz(0., 350., 0.),
-        ShopComponent,
+        DespawnOnExit(GameState::Shoping),
     ));
 
-    let text = format!("Money: {}", money.0);
+    let text = format!("Nuts: {}", money.0);
     commands.spawn((
         Text2d::new(text),
         TextLayout::new(Justify::Center, LineBreak::NoWrap),
         Transform::from_xyz(0., 320., 0.),
-        ShopComponent,
+        DespawnOnExit(GameState::Shoping),
         MoneyLabelComponent,
     ));
 
+    // new round button
+    commands
+        .spawn((
+            DespawnOnExit(GameState::Shoping),
+            Button,
+            Node {
+                width: Val::Px(UPGRADE_BUTTON_SIZE.x),
+                height: Val::Px(50.),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                position_type: PositionType::Absolute,
+                bottom: Val::Px(10.),
+                margin: UiRect::AUTO,
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.1, 0.2, 0.2)),
+            NewRound,
+        ))
+        .with_child(Text::new("New Round"));
+
     commands.spawn((
-        Text2d::new("New Round"),
-        TextLayout::new(Justify::Center, LineBreak::NoWrap),
-        Transform::from_xyz(0., -320., 0.),
-        Button(Vec2::new(50., 20.)),
-        NewRound,
-        ShopComponent,
+        UpgradeNodeParent,
+        DespawnOnExit(GameState::Shoping),
+        Node {
+            width: Val::Px(700.),
+            height: Val::Px(400.),
+            top: Val::Px(UPGRADE_FIELD_MARGIN.x),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..Default::default()
+        },
     ));
 
+    // spawn every update node
     for upgrade in upgrades.0.iter() {
-        let text = format!("{}\n{}", upgrade.title, upgrade.value_hint);
-        commands.spawn((
-            Text2d::new(text),
-            TextLayout::new(Justify::Center, LineBreak::NoWrap),
-            Transform::from_xyz(0., 0., 0.),
-            Button(Vec2::new(50., 20.)),
-            ShopComponent,
-            UpgradeComponent(upgrade.id),
-        ));
+        writer.write(SpawnUpgradeButtonMessage {
+            upgrade_id: upgrade.id,
+        });
+    }
+}
+
+fn spawn_upgrade(
+    mut reader: MessageReader<SpawnUpgradeButtonMessage>,
+    mut commands: Commands,
+    upgrades: Res<UpgradeList>,
+    parent: Single<Entity, With<UpgradeNodeParent>>,
+) {
+    // TODO set the correct position
+    for upgrade in reader.read() {
+        let id = upgrade.upgrade_id;
+        let upgrade = match upgrades.0.iter().find(|u| u.id == id) {
+            Some(val) => val,
+            None => return,
+        };
+
+        commands.entity(*parent).with_children(|parent| {
+            parent
+                .spawn((
+                    DespawnOnExit(GameState::Shoping),
+                    UpgradeComponent(id),
+                    UpgradeNode,
+                    Button,
+                    Transform::from_xyz(0., 0., 0.),
+                    Node {
+                        width: Val::Px(UPGRADE_BUTTON_SIZE.x),
+                        height: Val::Px(UPGRADE_BUTTON_SIZE.y),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        position_type: PositionType::Absolute,
+                        margin: UiRect::all(Val::Px(10.)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.2, 0.2, 0.3)),
+                ))
+                .with_children(|parent_field| {
+                    // draw the cost
+                    parent_field.spawn((
+                        UpgradeComponent(id),
+                        UpgradeCostLabel,
+                        Text::new(format!("{}", upgrade.cost)),
+                        TextFont::from_font_size(14.),
+                        Node {
+                            position_type: PositionType::Absolute,
+                            top: Val::Px(2.0),
+                            left: Val::Px(2.0),
+                            ..default()
+                        },
+                    ));
+                    // draw the available upgrades
+                    parent_field.spawn((
+                        UpgradeComponent(id),
+                        UpgradeUsesLabel,
+                        Text::new(format!("{}/{}", upgrade.cur_up_count, upgrade.max_up_count)),
+                        TextFont::from_font_size(14.),
+                        Node {
+                            position_type: PositionType::Absolute,
+                            top: Val::Px(2.0),
+                            right: Val::Px(2.0),
+                            ..default()
+                        },
+                    ));
+
+                    // draw title
+                    parent_field.spawn((
+                        Text::new(format!("{}\n{}", upgrade.title, upgrade.value_hint)),
+                        TextFont::from_font_size(18.),
+                        TextLayout::new(Justify::Center, LineBreak::NoWrap),
+                    ));
+                });
+        });
     }
 }
 
 fn check_buttons(
-    mut mouse_msg: MessageReader<MouseButtonInput>,
-    query: Query<(Entity, &GlobalTransform, &Button)>,
-    camera: Single<(&Camera, &GlobalTransform)>,
-    window: Single<&Window>,
+    query: Query<(Entity, &Interaction), (Changed<Interaction>, With<Button>)>,
     mut clicked_writer: MessageWriter<ButtonClickedMessage>,
 ) {
-    for msg in mouse_msg.read() {
-        if !(msg.button == MouseButton::Left) {
-            continue;
-        }
-
-        if let ButtonState::Pressed = msg.state {
-            // get the position
-            let Some(cursor_pos) = window.cursor_position() else {
-                return;
-            };
-            let (camera, camera_trans) = *camera;
-            let Ok(world_pos) = camera.viewport_to_world_2d(camera_trans, cursor_pos) else {
-                continue;
-            };
-
-            for (entity, trans, button) in &query {
-                let pos = trans.translation().truncate();
-                let diff = (world_pos - pos).abs();
-                if diff.x < button.0.x && diff.y < button.0.y {
-                    clicked_writer.write(ButtonClickedMessage(entity));
-                }
-            }
+    for (entity, interaction) in &query {
+        if *interaction == Interaction::Pressed {
+            clicked_writer.write(ButtonClickedMessage(entity));
         }
     }
 }
@@ -128,29 +225,67 @@ fn read_new_round_button(
 ) {
     for msg in reader.read() {
         if let Ok(_) = query.get(msg.0) {
+            println!("NExt Round");
             commands.set_state(GameState::Playing);
         }
     }
 }
 
+// TODO change to Node
 fn read_upgrade_button(
     mut reader: MessageReader<ButtonClickedMessage>,
-    mut commands: Commands,
-    mut query: Query<&mut UpgradeComponent>,
+    mut query: Query<&UpgradeComponent, With<UpgradeNode>>,
     mut player_stats: ResMut<PlayerStats>,
     mut money: ResMut<Money>,
-    mut writer: MessageWriter<MoneyLabelUpdatedMessage>,
+    mut money_writer: MessageWriter<MoneyLabelUpdatedMessage>,
     mut upgrade_list: ResMut<UpgradeList>,
+    mut changed_upgrade_writer: MessageWriter<ChangedUpgradeState>,
 ) {
     for msg in reader.read() {
         if let Ok(upgrade_comp) = query.get_mut(msg.0) {
+            println!("Action! id:-");
             if let Some(upgrade) = upgrade_list.0.iter_mut().find(|u| u.id == upgrade_comp.0) {
                 let stats = &mut *player_stats;
                 let mon = &mut *money;
                 (upgrade.increase_value)(upgrade, stats, mon);
-                writer.write(MoneyLabelUpdatedMessage(mon.0));
+                money_writer.write(MoneyLabelUpdatedMessage(mon.0));
+                changed_upgrade_writer.write(ChangedUpgradeState {
+                    upgrade_id: upgrade.id,
+                });
             } else {
                 println!("Cannot upgrade id: {}", upgrade_comp.0);
+            }
+        }
+    }
+}
+
+fn update_changed_upgrade_ui(
+    mut changed_upgrade_reader: MessageReader<ChangedUpgradeState>,
+    mut query: Query<(
+        &UpgradeComponent,
+        &mut Text,
+        Option<&UpgradeCostLabel>,
+        Option<&UpgradeUsesLabel>,
+    )>,
+    upgrade_list: Res<UpgradeList>,
+) {
+    for change in changed_upgrade_reader.read() {
+        for (up_comp, mut text, is_cost, is_uses) in query.iter_mut() {
+            if up_comp.0 != change.upgrade_id {
+                continue;
+            }
+
+            let upgrade = match upgrade_list.0.iter().find(|u| u.id == change.upgrade_id) {
+                Some(v) => v,
+                None => continue,
+            };
+
+            if is_cost.is_some() {
+                text.0 = format!("{}", upgrade.cost);
+            }
+
+            if is_uses.is_some() {
+                text.0 = format!("{}/{}", upgrade.cur_up_count, upgrade.max_up_count);
             }
         }
     }
@@ -163,11 +298,5 @@ fn update_money_label(
     for msg in reader.read() {
         let text = format!("Nuts: {}", msg.0);
         label.0 = text;
-    }
-}
-
-fn on_leave(query: Query<Entity, With<ShopComponent>>, mut commands: Commands) {
-    for entity in query {
-        commands.entity(entity).despawn();
     }
 }

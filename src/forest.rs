@@ -30,8 +30,7 @@ impl Plugin for ForestPlugin {
                 )
                     .run_if(in_state(GameState::Playing))
                     .chain(),
-            )
-            .add_systems(OnExit(GameState::Playing), on_leave);
+            );
     }
 }
 
@@ -60,9 +59,6 @@ struct IceAnimation;
 
 #[derive(Debug, Message)]
 pub struct SpawnNutMessage;
-
-#[derive(Component, Debug)]
-struct PlayingComponent;
 
 #[derive(Debug, Message)]
 pub struct DeadPlayerMessage;
@@ -125,7 +121,7 @@ fn setup_forest(
                 life: player_stats.cube_max_life,
             },
             IceAnimation,
-            PlayingComponent,
+            DespawnOnExit(GameState::Playing),
         ));
     }
 
@@ -162,7 +158,7 @@ fn spawn_nuts(
                     ..Default::default()
                 },
                 base_nut,
-                PlayingComponent,
+                DespawnOnExit(GameState::Playing),
             ))
             .with_child((
                 IceAnimation,
@@ -174,7 +170,7 @@ fn spawn_nuts(
                     }),
                     ..Default::default()
                 },
-                PlayingComponent,
+                DespawnOnExit(GameState::Playing),
             ));
     }
 }
@@ -371,7 +367,7 @@ fn draw_laser(
                 ..Default::default()
             },
             Laser,
-            PlayingComponent,
+            DespawnOnExit(GameState::Playing),
         ));
     }
 }
@@ -428,23 +424,18 @@ fn handle_falling(
 fn on_dead(
     mut reader: MessageReader<DeadPlayerMessage>,
     mut commands: Commands,
-    query: Query<Entity, With<PlayingComponent>>,
     money: Res<Money>,
 ) {
     for _ in reader.read() {
         let timer = Timer::new(Duration::from_secs_f32(1.5), TimerMode::Once);
         let text = format!("Game Over\nYou Have {} Nuts", money.0);
 
-        for entity in query {
-            commands.entity(entity).despawn();
-        }
-
         commands.spawn((
             EndScreenTimer(timer),
             Text2d::new(text),
             TextLayout::new(Justify::Center, LineBreak::NoWrap),
             Transform::from_xyz(0., 0., 0.),
-            PlayingComponent,
+            DespawnOnExit(GameState::Playing),
         ));
     }
 }
@@ -460,12 +451,6 @@ fn check_end_timer(
         println!("🔥");
 
         commands.set_state(GameState::Shoping);
-    }
-}
-
-fn on_leave(query: Query<Entity, With<PlayingComponent>>, mut commands: Commands) {
-    for entity in query {
-        commands.entity(entity).despawn();
     }
 }
 
