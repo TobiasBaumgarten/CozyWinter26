@@ -1,14 +1,33 @@
 use bevy::{input::mouse::MouseButtonInput, prelude::*};
 use bevy_embedded_assets::EmbeddedAssetPlugin;
 
-use crate::{forest::ForestPlugin, shop::ShopPlugin};
+use crate::{define_upgrades::get_upgrades, forest::ForestPlugin, shop::ShopPlugin};
 
+mod define_upgrades;
 mod forest;
 mod shop;
 
+fn main() {
+    let window = WindowPlugin {
+        primary_window: Some(Window {
+            title: "Cozy Winter Game by Beside Central".into(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    App::new()
+        .add_plugins((EmbeddedAssetPlugin::default(), DefaultPlugins.set(window)))
+        .add_systems(Startup, setup)
+        .add_plugins((ForestPlugin, ShopPlugin))
+        .insert_state(GameState::Start)
+        .add_systems(Update, (start_game).run_if(in_state(GameState::Start)))
+        .run();
+}
+
 impl PlayerStats {
     fn get_value(&self, nut_type: &NutType) -> i32 {
-        self.base_value
+        self.base_nut_value
             * match nut_type {
                 NutType::Base => 1,
                 NutType::Bronze => 10,
@@ -104,12 +123,12 @@ enum NutType {
 struct PlayerStats {
     dmg: f32,
     laser_length: f32,
-    lifes: i32,
     cube_max_life: f32,
     size: f32,
-    life: f32,
+    nut_base_life: f32,
     dir: Vec2,
-    base_value: i32,
+    base_nut_value: i32,
+    respawn_nuts: i32,
     start_nuts: i32,
     nuts_respawn_time: f32,
 }
@@ -119,24 +138,6 @@ struct UpgradeList(Vec<UpgradeType>);
 
 #[derive(Debug, Resource, Clone)]
 struct Money(i32);
-
-fn main() {
-    let window = WindowPlugin {
-        primary_window: Some(Window {
-            title: "Cozy Winter Game by Beside Central".into(),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-
-    App::new()
-        .add_plugins((EmbeddedAssetPlugin::default(), DefaultPlugins.set(window)))
-        .add_systems(Startup, setup)
-        .add_plugins((ForestPlugin, ShopPlugin))
-        .insert_state(GameState::Start)
-        .add_systems(Update, (start_game).run_if(in_state(GameState::Start)))
-        .run();
-}
 
 fn setup(mut commands: Commands) {
     commands.spawn(Camera2d);
@@ -149,14 +150,14 @@ fn setup(mut commands: Commands) {
     let player_stats = PlayerStats {
         dmg: 50.,
         laser_length: 500.,
-        lifes: 1,
         cube_max_life: 200.,
         size: 16.,
         dir: Vec2::new(0., 0.),
-        life: 100.,
-        base_value: 1,
-        nuts_respawn_time: 100.,
-        start_nuts: 2,
+        nut_base_life: 100.,
+        base_nut_value: 1,
+        nuts_respawn_time: 5.,
+        respawn_nuts: 1,
+        start_nuts: 0,
     };
     commands.insert_resource(player_stats.clone());
 
@@ -166,25 +167,7 @@ fn setup(mut commands: Commands) {
         Transform::from_xyz(0., 0., 0.),
     ));
 
-    let mut upgrades: Vec<UpgradeType> = vec![];
-
-    // define upgrades
-    {
-        // damage upgrade
-        upgrades.push(UpgradeType {
-            title: "Damage".into(),
-            value_hint: "base + 5".into(),
-            cost: 1,
-            increase_value: |upgrade, player_stats, money| {
-                if upgrade.rise_up_count(money).is_some() {
-                    player_stats.dmg += 5.;
-                    upgrade.cost += 1;
-                }
-            },
-            ..Default::default()
-        });
-    }
-
+    let upgrades = get_upgrades();
     commands.insert_resource(UpgradeList(upgrades));
 }
 
@@ -200,5 +183,3 @@ fn start_game(
         commands.set_state(GameState::Playing);
     }
 }
-
-// TODO Resouce that saves all the upgrade states

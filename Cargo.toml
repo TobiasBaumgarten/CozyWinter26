@@ -4,8 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bevy = { version = "0.18.0", features = ["dynamic_linking", "debug"] }
+bevy = { version = "0.18.0", features = ["audio", "wav"] }
 bevy_embedded_assets = "0.15.0"
+rand = "0.10.0"
+getrandom = { version = "0.4", features = ["wasm_js"] }
 
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]
@@ -14,3 +16,6 @@ opt-level = 1
 # Enable a large amount of optimization in the dev profile for dependencies.
 [profile.dev.package."*"]
 opt-level = 3
+
+[features]
+dev = ["bevy/dynamic_linking", "bevy/debug"]

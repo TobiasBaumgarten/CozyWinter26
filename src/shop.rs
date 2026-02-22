@@ -1,14 +1,9 @@
-use bevy::{
-    input::{ButtonState, mouse::MouseButtonInput},
-    prelude::*,
-};
+use bevy::prelude::*;
 
 use crate::{GameState, Money, PlayerStats, UpgradeList};
 
 const UPGRADE_BUTTON_SIZE: Vec2 = Vec2::new(150., 80.);
-const UPGRADE_FIELD_MARGIN: Vec2 = Vec2::new(100., 100.);
-const UPGRADE_FIELD_PADDING: Vec2 = Vec2::new(30., 30.);
-const UPGRADE_BUTTON_ROW_COUNT: usize = 4;
+const UPGRADE_FIELD_MARGIN: Vec2 = Vec2::new(100., 50.);
 
 pub struct ShopPlugin;
 
@@ -27,6 +22,7 @@ impl Plugin for ShopPlugin {
                     spawn_upgrade,
                     update_money_label,
                     update_changed_upgrade_ui,
+                    update_available_upgrade_money,
                     read_new_round_button,
                 )
                     .chain()
@@ -76,7 +72,8 @@ fn setup_shop(
     mut commands: Commands,
     money: Res<Money>,
     upgrades: Res<UpgradeList>,
-    mut writer: MessageWriter<SpawnUpgradeButtonMessage>,
+    mut spawn_writer: MessageWriter<SpawnUpgradeButtonMessage>,
+    mut money_writer: MessageWriter<MoneyLabelUpdatedMessage>,
 ) {
     commands.spawn((
         Text2d::new("Shop"),
@@ -93,6 +90,8 @@ fn setup_shop(
         DespawnOnExit(GameState::Shoping),
         MoneyLabelComponent,
     ));
+
+    money_writer.write(MoneyLabelUpdatedMessage(money.0));
 
     // new round button
     commands
@@ -118,18 +117,23 @@ fn setup_shop(
         UpgradeNodeParent,
         DespawnOnExit(GameState::Shoping),
         Node {
-            width: Val::Px(700.),
+            width: Val::Px(900.),
             height: Val::Px(400.),
-            top: Val::Px(UPGRADE_FIELD_MARGIN.x),
-            justify_content: JustifyContent::Center,
+            margin: UiRect::AUTO,
+            top: Val::Px(UPGRADE_FIELD_MARGIN.y),
             align_items: AlignItems::Center,
+            flex_direction: FlexDirection::Row, // side by side
+            flex_wrap: FlexWrap::Wrap,          // wrap to next line when full
+            align_content: AlignContent::Start,
+            row_gap: Val::Px(25.),    // space between rows
+            column_gap: Val::Px(25.), // space between columns
             ..Default::default()
         },
     ));
 
     // spawn every update node
     for upgrade in upgrades.0.iter() {
-        writer.write(SpawnUpgradeButtonMessage {
+        spawn_writer.write(SpawnUpgradeButtonMessage {
             upgrade_id: upgrade.id,
         });
     }
@@ -141,7 +145,6 @@ fn spawn_upgrade(
     upgrades: Res<UpgradeList>,
     parent: Single<Entity, With<UpgradeNodeParent>>,
 ) {
-    // TODO set the correct position
     for upgrade in reader.read() {
         let id = upgrade.upgrade_id;
         let upgrade = match upgrades.0.iter().find(|u| u.id == id) {
@@ -156,14 +159,12 @@ fn spawn_upgrade(
                     UpgradeComponent(id),
                     UpgradeNode,
                     Button,
-                    Transform::from_xyz(0., 0., 0.),
                     Node {
                         width: Val::Px(UPGRADE_BUTTON_SIZE.x),
                         height: Val::Px(UPGRADE_BUTTON_SIZE.y),
                         justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        position_type: PositionType::Absolute,
-                        margin: UiRect::all(Val::Px(10.)),
+                        align_items: AlignItems::End,
+                        padding: UiRect::all(Val::Px(10.)),
                         ..default()
                     },
                     BackgroundColor(Color::srgb(0.2, 0.2, 0.3)),
@@ -210,9 +211,13 @@ fn spawn_upgrade(
 fn check_buttons(
     query: Query<(Entity, &Interaction), (Changed<Interaction>, With<Button>)>,
     mut clicked_writer: MessageWriter<ButtonClickedMessage>,
+    asset_server: Res<AssetServer>,
+    mut commands: Commands,
 ) {
     for (entity, interaction) in &query {
         if *interaction == Interaction::Pressed {
+            let click_sound = asset_server.load("embedded://button.wav");
+            commands.spawn((AudioPlayer::new(click_sound), PlaybackSettings::DESPAWN));
             clicked_writer.write(ButtonClickedMessage(entity));
         }
     }
@@ -231,7 +236,6 @@ fn read_new_round_button(
     }
 }
 
-// TODO change to Node
 fn read_upgrade_button(
     mut reader: MessageReader<ButtonClickedMessage>,
     mut query: Query<&UpgradeComponent, With<UpgradeNode>>,
@@ -286,6 +290,29 @@ fn update_changed_upgrade_ui(
 
             if is_uses.is_some() {
                 text.0 = format!("{}/{}", upgrade.cur_up_count, upgrade.max_up_count);
+            }
+        }
+    }
+}
+
+fn update_available_upgrade_money(
+    mut reader: MessageReader<MoneyLabelUpdatedMessage>,
+    mut query: Query<(&UpgradeComponent, &mut BackgroundColor), With<UpgradeNode>>,
+    upgrade_list: Res<UpgradeList>,
+) {
+    for money in reader.read() {
+        for (up_comp, mut back) in query.iter_mut() {
+            let upgrade = match upgrade_list.0.iter().find(|u| u.id == up_comp.0) {
+                Some(v) => v,
+                None => continue,
+            };
+
+            if upgrade.cur_up_count >= upgrade.max_up_count {
+                back.0 = Color::srgb(0.1, 0.1, 0.1);
+            } else if money.0 >= upgrade.cost {
+                back.0 = Color::srgb(0.2, 0.3, 0.2);
+            } else {
+                back.0 = Color::srgb(0.3, 0.2, 0.2);
             }
         }
     }

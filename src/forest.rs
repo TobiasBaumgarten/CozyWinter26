@@ -1,11 +1,16 @@
 use std::{f32::consts::PI, time::Duration};
 
-use bevy::{math::ops::sin, prelude::*};
+use bevy::{
+    math::{VectorSpace, ops::sin},
+    prelude::*,
+};
+use rand::RngExt;
 
 use crate::{GameState, Money, NutType, PlayerStats};
 
 const HALF_SIZE_CUBE: f32 = 16.;
 const GRAVITY: Vec2 = Vec2::new(0., 70.);
+const HALF_SIZE_SPAWN_FRAME: Vec2 = Vec2::new(300., 200.);
 
 pub struct ForestPlugin;
 
@@ -20,6 +25,7 @@ impl Plugin for ForestPlugin {
                     update_cube,
                     collide_laser_cube,
                     draw_laser,
+                    update_respawn_nuts,
                     spawn_nuts,
                     handle_sprite_state_nut,
                     handle_sprite_state_player,
@@ -44,21 +50,35 @@ struct Cube {
 }
 
 #[derive(Debug, Component)]
+struct Nut;
+
+#[derive(Debug, Component)]
 struct Falling(Timer, Vec2);
 
 #[derive(Debug, Component)]
 struct EndScreenTimer(Timer);
 
 #[derive(Debug, Component)]
+struct RespawnNutsTimer(Timer);
+
+#[derive(Debug, Component)]
 struct PlayerCube {
     available_cubes: i32,
 }
+#[derive(Resource)]
+struct HitCubeSound(Entity);
+
+#[derive(Resource)]
+struct HitNutSound(Entity);
+
+#[derive(Resource)]
+struct ReleaseNutSound(Entity);
 
 #[derive(Debug, Component)]
 struct IceAnimation;
 
 #[derive(Debug, Message)]
-pub struct SpawnNutMessage;
+pub struct SpawnNutMessage(Option<Vec2>);
 
 #[derive(Debug, Message)]
 pub struct DeadPlayerMessage;
@@ -80,6 +100,15 @@ fn setup_forest(
     player_stats: Res<PlayerStats>,
     mut texture_atlases: ResMut<Assets<TextureAtlasLayout>>,
 ) {
+    // background sprite
+    {
+        commands.spawn((
+            DespawnOnExit(GameState::Playing),
+            Sprite::from_image(asset_server.load("embedded://bg.png")),
+            Transform::from_xyz(0., 0., -1.),
+        ));
+    }
+
     // init laser
     {
         let start = Vec2::new(-250., -200.);
@@ -125,8 +154,52 @@ fn setup_forest(
         ));
     }
 
-    // spawn the fist nut
-    writer.write(SpawnNutMessage);
+    // spawn the fist nut - this will spawn every time on the same position
+    writer.write(SpawnNutMessage(Some(Vec2::ZERO)));
+
+    // spawn beginning nuts
+    {
+        println!("Player start nuts -> {}", player_stats.start_nuts);
+        for _ in 0..player_stats.start_nuts {
+            writer.write(SpawnNutMessage(None));
+        }
+    }
+
+    // spawn nuts timer
+    {
+        commands.spawn((
+            DespawnOnExit(GameState::Playing),
+            RespawnNutsTimer(Timer::from_seconds(
+                player_stats.nuts_respawn_time,
+                TimerMode::Repeating,
+            )),
+        ));
+    }
+
+    // spawn sound
+    {
+        // cube hit sound
+        let sound_entity = commands
+            .spawn((
+                AudioPlayer::new(asset_server.load("embedded://cube_hit.wav")),
+                PlaybackSettings::LOOP.paused(),
+                DespawnOnExit(GameState::Playing),
+            ))
+            .id();
+
+        commands.insert_resource(HitCubeSound(sound_entity));
+
+        // nut hit sound
+        let sound_entity = commands
+            .spawn((
+                AudioPlayer::new(asset_server.load("embedded://nut_hit.wav")),
+                PlaybackSettings::LOOP.paused(),
+                DespawnOnExit(GameState::Playing),
+            ))
+            .id();
+
+        commands.insert_resource(HitNutSound(sound_entity));
+    }
 }
 
 fn spawn_nuts(
@@ -141,20 +214,29 @@ fn spawn_nuts(
     // TODO: Set position
     // TODO: resize sprite
 
-    for _ in reader.read() {
+    for new_nut_pos in reader.read() {
         // TODO Random with a chance NutType
         let base_nut = NutType::Base;
+        let pos = match new_nut_pos.0 {
+            Some(v) => v,
+            None => {
+                let mut rng = rand::rng();
+                let x = rng.random_range(-HALF_SIZE_SPAWN_FRAME.x..HALF_SIZE_SPAWN_FRAME.x);
+                let y = rng.random_range(-HALF_SIZE_SPAWN_FRAME.y..HALF_SIZE_SPAWN_FRAME.y);
+                Vec2::new(x, y)
+            }
+        };
 
         commands
             .spawn((
                 Sprite::from_image(nut.clone()),
                 Cube {
                     size: player_stats.size,
-                    life: player_stats.life,
+                    life: player_stats.nut_base_life,
                 },
                 Transform {
                     rotation: Quat::from_rotation_z(player_stats.dir.to_angle()),
-                    translation: Vec3::new(0., 0., 0.),
+                    translation: pos.extend(0.),
                     ..Default::default()
                 },
                 base_nut,
@@ -192,12 +274,45 @@ fn update_cube(
     }
 }
 
+fn update_respawn_nuts(
+    mut timer: Single<&mut RespawnNutsTimer>,
+    mut writer: MessageWriter<SpawnNutMessage>,
+    time: Res<Time>,
+    stats: Res<PlayerStats>,
+) {
+    timer.0.tick(time.delta());
+
+    if timer.0.just_finished() {
+        for _ in 0..stats.respawn_nuts {
+            writer.write(SpawnNutMessage(None));
+        }
+    }
+}
+
 fn collide_laser_cube(
     mut points: ResMut<LaserPoints>,
-    mut cubes: Query<(&mut Cube, &Transform, Option<&mut PlayerCube>)>,
+    mut cubes: Query<(
+        &mut Cube,
+        &Transform,
+        Option<&mut PlayerCube>,
+        Option<&NutType>,
+    )>,
     time: Res<Time>,
     player_stats: Res<PlayerStats>,
+    cube_hit_sound: ResMut<HitCubeSound>,
+    nut_hit_sound: ResMut<HitNutSound>,
+    audio_sinks: Query<&AudioSink>,
 ) {
+    // sound pause default
+    {
+        if let Ok(sink) = audio_sinks.get(cube_hit_sound.0) {
+            sink.pause();
+        }
+        if let Ok(sink) = audio_sinks.get(nut_hit_sound.0) {
+            sink.pause();
+        }
+    }
+
     let start = points.source_start;
     let mut ray_start = start;
     let mut ray_dir = points.source_dir;
@@ -207,7 +322,7 @@ fn collide_laser_cube(
     points.list = vec![(start, start + ray_dir * remaining)];
 
     // First pass: find PlayerCube and reflect
-    for (mut cube, trans, is_player) in cubes.iter_mut() {
+    for (mut cube, trans, is_player, is_nut_type) in cubes.iter_mut() {
         let cube_matrix = trans.to_matrix();
         let world_to_local = cube_matrix.inverse();
 
@@ -228,9 +343,20 @@ fn collide_laser_cube(
 
             cube.life -= time.delta_secs() * player_stats.dmg;
 
+            if is_nut_type.is_some() {
+                // play nut hit sound
+                if let Ok(sink) = audio_sinks.get(cube_hit_sound.0) {
+                    sink.play();
+                }
+            }
+
             // handle player
             // TODO but change this later so that the laser can further s
             if is_player.is_some() {
+                // play hit sound
+                if let Ok(sink) = audio_sinks.get(cube_hit_sound.0) {
+                    sink.play();
+                }
                 // Reflect the ray
                 let world_normal = (trans.rotation * local_normal.extend(0.0))
                     .truncate()
@@ -357,7 +483,7 @@ fn draw_laser(
 
         commands.spawn((
             Sprite {
-                color: Color::srgb(1., 1., 1.),
+                color: Color::srgb(1., 0.5, 0.5),
                 custom_size: Some(Vec2::new(length, thickness)),
                 ..Default::default()
             },
@@ -381,8 +507,8 @@ fn handle_sprite_state_nut(
         let Ok(cube) = parent_query.get(child_of.parent()) else {
             continue;
         };
-        let state_part_value = player_stats.life as usize / 4;
-        let state = (player_stats.life - cube.life) as usize / (state_part_value);
+        let state_part_value = player_stats.nut_base_life as usize / 4;
+        let state = (player_stats.nut_base_life - cube.life) as usize / (state_part_value);
         let state = state.clamp(0, 4);
         if let Some(_atlas) = &mut sprite.texture_atlas {
             _atlas.index = state;
@@ -448,8 +574,6 @@ fn check_end_timer(
     single.0.tick(time.delta());
 
     if single.0.is_finished() {
-        println!("🔥");
-
         commands.set_state(GameState::Shoping);
     }
 }
