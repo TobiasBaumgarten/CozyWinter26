@@ -1,9 +1,10 @@
 use bevy::{
+    ecs::relationship::RelationshipSourceCollection,
     input::{ButtonState, mouse::MouseButtonInput},
     prelude::*,
 };
 
-use crate::{GameState, Money, PlayerStats};
+use crate::{GameState, Money, PlayerStats, UpgradeList};
 
 pub struct ShopPlugin;
 
@@ -43,21 +44,12 @@ struct MoneyLabelComponent;
 struct NewRound;
 
 #[derive(Component, Debug)]
-struct UpgradeComponent {
-    times: i32,
-    upgrade_type: UpgradeType,
-}
-
-#[derive(Debug)]
-enum UpgradeType {
-    Damage,
-    LaserLength,
-}
-
-#[derive(Component, Debug)]
 struct ShopComponent;
 
-fn setup_shop(mut commands: Commands, money: Res<Money>) {
+#[derive(Component, Debug)]
+struct UpgradeComponent(usize);
+
+fn setup_shop(mut commands: Commands, money: Res<Money>, upgrades: Res<UpgradeList>) {
     commands.spawn((
         Text2d::new("Shop"),
         TextLayout::new(Justify::Center, LineBreak::NoWrap),
@@ -83,17 +75,17 @@ fn setup_shop(mut commands: Commands, money: Res<Money>) {
         ShopComponent,
     ));
 
-    commands.spawn((
-        UpgradeComponent {
-            times: 0,
-            upgrade_type: UpgradeType::Damage,
-        },
-        Text2d::new("Damage"),
-        TextLayout::new(Justify::Center, LineBreak::NoWrap),
-        Transform::from_xyz(0., 0., 0.),
-        Button(Vec2::new(50., 20.)),
-        ShopComponent,
-    ));
+    for upgrade in upgrades.0.iter() {
+        let text = format!("{}\n{}", upgrade.title, upgrade.value_hint);
+        commands.spawn((
+            Text2d::new(text),
+            TextLayout::new(Justify::Center, LineBreak::NoWrap),
+            Transform::from_xyz(0., 0., 0.),
+            Button(Vec2::new(50., 20.)),
+            ShopComponent,
+            UpgradeComponent(upgrade.id),
+        ));
+    }
 }
 
 fn check_buttons(
@@ -148,20 +140,17 @@ fn read_upgrade_button(
     mut player_stats: ResMut<PlayerStats>,
     mut money: ResMut<Money>,
     mut writer: MessageWriter<MoneyLabelUpdatedMessage>,
+    mut upgrade_list: ResMut<UpgradeList>,
 ) {
     for msg in reader.read() {
-        if let Ok(mut upgrade) = query.get_mut(msg.0) {
-            if money.0 <= upgrade.times {
-                println!("Cannot upgrade");
-                return;
-            }
-            println!("Should cost {}", upgrade.times);
-            upgrade.times += 1;
-            money.0 -= upgrade.times;
-            writer.write(MoneyLabelUpdatedMessage(money.0));
-            match upgrade.upgrade_type {
-                UpgradeType::Damage => player_stats.dmg += 10.,
-                UpgradeType::LaserLength => player_stats.laser_length += 20.,
+        if let Ok(upgrade_comp) = query.get_mut(msg.0) {
+            if let Some(upgrade) = upgrade_list.0.iter_mut().find(|u| u.id == upgrade_comp.0) {
+                let stats = &mut *player_stats;
+                let mon = &mut *money;
+                (upgrade.increase_value)(upgrade, stats, mon);
+                writer.write(MoneyLabelUpdatedMessage(mon.0));
+            } else {
+                println!("Cannot upgrade id: {}", upgrade_comp.0);
             }
         }
     }

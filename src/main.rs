@@ -6,35 +6,6 @@ use crate::{forest::ForestPlugin, shop::ShopPlugin};
 mod forest;
 mod shop;
 
-// #[derive(Debug, Resource)]
-// struct NutStats {
-//     size: UpgradeType<f32>,
-//     life: UpgradeType<f32>,
-//     dir: UpgradeType<Vec2>,
-//     base_value: UpgradeType<i32>,
-//     start_nuts: UpgradeType<i32>,
-//     nuts_respawn_time: UpgradeType<f32>,
-// }
-
-#[derive(Debug, Clone)]
-struct UpgradeType<T> {
-    value: T,
-    cur_count: i32,
-    max_count: i32,
-    increase_value: fn(i32) -> i32,
-}
-
-impl<T> UpgradeType<T> {
-    fn new(value: T) -> Self {
-        Self {
-            value,
-            cur_count: 0,
-            max_count: 5,
-            increase_value: |v| v + 1,
-        }
-    }
-}
-
 impl PlayerStats {
     fn get_value(&self, nut_type: &NutType) -> i32 {
         self.base_value
@@ -45,6 +16,70 @@ impl PlayerStats {
                 NutType::Gold => 50,
                 NutType::Diamant => 100,
             }
+    }
+}
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+// A global counter that starts at 0
+static UPGRADE_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Debug, Clone)]
+struct UpgradeType {
+    id: usize,
+    cost: i32,
+    title: String,
+    value_hint: String,
+    cur_up_count: i32,
+    max_up_count: i32,
+    increase_value: fn(&mut Self, &mut PlayerStats, &mut Money),
+}
+
+impl UpgradeType {
+    fn new() -> Self {
+        Self {
+            increase_value: |upgrade, stats, money| {
+                if upgrade.rise_up_count(money).is_some() {
+                    stats.dmg += 2.;
+                    upgrade.cost += 1;
+                }
+            },
+            ..Default::default()
+        }
+    }
+
+    fn rise_up_count(&mut self, money: &mut Money) -> Option<()> {
+        if self.cur_up_count >= self.max_up_count {
+            return None;
+        }
+        if money.0 < self.cost {
+            return None;
+        }
+        money.0 -= self.cost;
+        println!("Upgraded '{}'", self.title);
+        self.cur_up_count += 1;
+        Some(())
+    }
+}
+
+impl Default for UpgradeType {
+    fn default() -> Self {
+        // fetch_add returns the PREVIOUS value and increments it by 1
+        let new_id = UPGRADE_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+
+        Self {
+            id: new_id,
+            title: "Undefined".into(),
+            value_hint: "+0".into(),
+            cost: 1,
+            cur_up_count: 0,
+            max_up_count: 5,
+            increase_value: |upgrade, stats, _money| {
+                // Note: Logic here usually depends on the specific upgrade type
+                stats.dmg += 2.0;
+                upgrade.cost += 1;
+            },
+        }
     }
 }
 
@@ -79,7 +114,10 @@ struct PlayerStats {
     nuts_respawn_time: f32,
 }
 
-#[derive(Debug, Resource)]
+#[derive(Resource, Debug)]
+struct UpgradeList(Vec<UpgradeType>);
+
+#[derive(Debug, Resource, Clone)]
 struct Money(i32);
 
 fn main() {
@@ -100,11 +138,12 @@ fn main() {
         .run();
 }
 
-fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+fn setup(mut commands: Commands) {
     commands.spawn(Camera2d);
 
     // init money
-    commands.insert_resource(Money(0));
+    let money = Money(0);
+    commands.insert_resource(money);
 
     // init player
     let player_stats = PlayerStats {
@@ -126,6 +165,27 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         TextLayout::new(Justify::Center, LineBreak::NoWrap),
         Transform::from_xyz(0., 0., 0.),
     ));
+
+    let mut upgrades: Vec<UpgradeType> = vec![];
+
+    // define upgrades
+    {
+        // damage upgrade
+        upgrades.push(UpgradeType {
+            title: "Damgae".into(),
+            value_hint: "+5".into(),
+            cost: 1,
+            increase_value: |upgrade, player_stats, money| {
+                if upgrade.rise_up_count(money).is_some() {
+                    player_stats.dmg += 5.;
+                    upgrade.cost += 1;
+                }
+            },
+            ..Default::default()
+        });
+    }
+
+    commands.insert_resource(UpgradeList(upgrades));
 }
 
 fn start_game(

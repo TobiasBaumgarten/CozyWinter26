@@ -2,7 +2,7 @@ use std::{f32::consts::PI, time::Duration};
 
 use bevy::{math::ops::sin, prelude::*};
 
-use crate::{GameState, Money, NutType, PlayerStats, setup};
+use crate::{GameState, Money, NutType, PlayerStats};
 
 const HALF_SIZE_CUBE: f32 = 16.;
 const GRAVITY: Vec2 = Vec2::new(0., 70.);
